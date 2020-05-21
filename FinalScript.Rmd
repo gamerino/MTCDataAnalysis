@@ -1,0 +1,419 @@
+---
+title: "FinalScript"
+author: "Gabriela Merino"
+date: "5/19/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(width=165)
+```
+
+## Analyzing MTC data
+
+This file contains all the processing performed for analyzing MTC data in order 
+to compare values observed using different prosthesis and under several use 
+conditions.
+
+```{r, results="hide",warning=FALSE,message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(cowplot)
+library(nlme)
+library(emmeans)
+```
+
+### Data loading and formatting
+
+Data is stored as a '.csv' file. Contained columns are:
+
+* MTC: Measured MTC value
+* Persona: ID of the patient
+* Protesis: Prosthesis used for the measurement. It could be 
+    + 1 ('Mech' or 'NAA')
+    + 2 ('Echelon' or 'AHA')
+    + 3 ('Elan' or 'AHA-MC')
+* Rampa: Indicates if the MTC was measured in ascent (1) or descent (2) walk ramp
+* Prot..Hab: Prosthesis the patient uses daily. It could be 
+    + 1 ('Mech' or 'NAA')
+    + 2 ('Echelon' or 'AHA')
+    + 3 ('Elan' or 'AHA')
+* Lado: Refers to the arm-side measured (1: 'Amputee', 2: 'Sound') 
+
+```{r}
+MTCData<-read.csv("Gaby_V2.csv",  header=T)
+head(MTCData)
+```
+```{r}
+names(MTCData)[2:6]<-c("Patient", "Prosthesis", "Terrain", 
+                       "Habitual prosthesis", "Side")
+
+for(i in 2:ncol(MTCData))
+{MTCData[,i]<-factor(MTCData[,i])}
+
+levels(MTCData$Prosthesis)<-c("NAA", "AHA", "AHA-MC")
+levels(MTCData[,"Habitual prosthesis"])<-c("NAA", "AHA", "AHA")
+levels(MTCData$Terrain)<-c("Ascent", "Descent")
+levels(MTCData$Side)<-c("Amputee", "Sound")
+```
+
+### Data exploration
+
+```{r}
+summary(MTCData)
+```
+
+```{r}
+quantile(MTCData$MTC,probs = 0.99)
+```
+
+Filtering MTC data considering the 99% quantile as a threshold.
+
+```{r}
+MTCData%>%
+  filter(MTC < quantile(MTCData$MTC,probs = 0.99)) -> redData
+
+MTCData%>%
+  filter(MTC >= quantile(MTCData$MTC,probs = 0.99)) -> filteredData
+```
+
+Looking the filtered data
+
+```{r}
+table(filteredData$Prosthesis,filteredData$Patient) 
+```
+```{r}
+table(filteredData[,"Habitual prosthesis"],filteredData$Patient) 
+```
+
+
+```{r}
+table(filteredData$Terrain,filteredData$Patient) 
+```
+
+
+```{r}
+table(filteredData$Side,filteredData$Patient) 
+```
+
+Summary of the data kept for the analysis
+```{r}
+summary(redData)
+```
+
+
+```{r}
+summary(redData$Patient)
+```
+
+Exploring the MTC density plot before and after filtering.
+```{r}
+
+g<-ggplot(MTCData, aes(x=MTC))+geom_density(color="red")+
+  labs(title="Raw MTC")+theme_minimal()
+gf<-ggplot(redData, aes(x=MTC))+geom_density(color="blue")+
+  labs(title="Filtered MTC")+theme_minimal()
+
+p<-plot_grid(g,gf,labels=c("A", "B"))
+p
+ggplot2::ggsave(p, file="densityMTC.png", height=5, width=7, dpi=450)
+
+```
+
+#### Exploring MTC of amputee sides
+
+```{r}
+redDataAmp<-redData[redData$Side=="Amputee",]
+g<-ggplot(redDataAmp, aes(x=Prosthesis, y=MTC, 
+   fill=Terrain,color=Terrain))+geom_boxplot(alpha=0.6)+facet_grid(~get(
+   'Habitual prosthesis'))+ labs(title="Habitual prosthesis")+theme_minimal()+
+   scale_fill_brewer(palette = "Set1")+scale_color_brewer(palette = "Set1")+
+   theme(plot.title=element_text(size=10, hjust = 0.5))
+g
+ggsave(g, file="BoxplotMTC.png", width=8.5, height=6, dpi=600)
+```
+
+```{r}
+g<-ggplot(redDataAmp, aes(x=Patient, y=MTC, 
+    fill=Prosthesis, color=Prosthesis))+geom_boxplot(alpha=0.6)+
+    facet_grid(~Terrain)+ labs(title="Terrain")+theme_minimal()+
+    scale_fill_brewer(palette = "Set2")+scale_color_brewer(palette = "Set2")+
+    theme(plot.title=element_text(size=10, hjust = 0.5), 
+    legend.position = "bottom")
+g
+
+ggsave(g, file="BoxplotMTCPersona.png", width=8, height=6, dpi=600)
+```
+
+
+```{r}
+g<-g+facet_grid(get('Habitual prosthesis')~Terrain)
+g
+ggsave(g, file="BoxplotMTCPersona2.png", width=8, height=6, dpi=600)
+```
+
+#### Exploring MTC of sound sides
+
+```{r}
+redDataSound<-redData[redData$Side=="Sound",]
+g<-ggplot(redDataSound, aes(x=Prosthesis, y=MTC, 
+    fill=Terrain, color=Terrain))+geom_boxplot(alpha=0.6)+
+    facet_grid(~get('Habitual prosthesis'))+
+    labs(title="Habitual prosthesis")+theme_minimal()+
+    scale_fill_brewer(palette = "Set1")+scale_color_brewer(palette = "Set1")+
+    theme(plot.title=element_text(size=10, hjust = 0.5))
+g
+ggsave(g, file="BoxplotMTCSano.png", width=8, height=6, dpi=600)
+```
+
+```{r}
+g<-ggplot(redData[redData$Side=="Sound",], aes(x=Patient, y=MTC, fill=Prosthesis,
+    color=Prosthesis))+geom_boxplot(alpha=0.6)+facet_grid(~Terrain)+ labs(
+    title="Terrain")+theme_minimal()+scale_fill_brewer(palette = "Set2")+
+    scale_color_brewer(palette = "Set2")+theme(plot.title=element_text(size=10,
+    hjust = 0.5), legend.position = "bottom")
+g
+ggsave(g, file="BoxplotMTCPersonaSano.png", width=8, height=6, dpi=600)
+
+```
+
+```{r}
+g<-g+facet_grid(get('Habitual prosthesis')~Terrain)
+g
+ggsave(g, file="BoxplotMTCPersonaSano2.png", width=8, height=6, dpi=600)
+```
+
+### MTC model
+We will follow the Top-Down strategy, propossing, as a first step, a maximal model for the fixed effects and the right structure for random variables.
+
+
+```{r, results="hide",warning=FALSE,message=FALSE}
+# only for lme using
+names(redDataAmp)[5]<-paste(strsplit(names(redDataAmp)[5],split=" ")[[1]], collapse="_")
+```
+
+For the fixed effect components, we are interested in evaluating changes in the MTC due to the use of different prosthesis within each terrain without comparison between them. We also want to evaluate possible effects of
+the habitual use of a specific prosthesis.
+
+Starting with a single structure for random effects:
+
+```{r}
+MTCModel<-lme(MTC~Terrain+Habitual_prosthesis+Terrain:Habitual_prosthesis+Habitual_prosthesis:Prosthesis+Habitual_prosthesis:Terrain:Prosthesis, random=~1|Patient,method="REML", 
+data=redDataAmp, control = list(opt = "optim"))
+anova(MTCModel)
+```
+
+Another structure for the random effects:
+
+```{r}
+MTCModelRE<-lme(MTC~Terrain+Habitual_prosthesis+Terrain:Habitual_prosthesis+Habitual_prosthesis:Prosthesis+Habitual_prosthesis:Terrain:Prosthesis, random=~Habitual_prosthesis-1|Patient,method="REML", 
+data=redDataAmp, control = list(opt = "optim"))
+anova(MTCModelRE)
+```
+
+For choosing the right model for the random effects we should perform LRT tests
+between nested models.
+
+LRT test between `MTCModel` and `MTCModelRE`:
+```{r}
+anova(MTCModelRE, MTCModel)
+```
+
+The p-value is not significant, at a significance level (\alpha=0.05), MTCModel is preferred (the simplest one).
+
+```{r}
+anova(MTCModel)
+```
+
+Now, we must to choose the structure of the residuals covariance matrix
+
+
+```{r}
+MTCModelCorRes<-lme(MTC~Terrain+Habitual_prosthesis+Terrain:Habitual_prosthesis+Habitual_prosthesis:Prosthesis+Habitual_prosthesis:Terrain:Prosthesis,    random=~1|Patient,method="REML", 
+data=redDataAmp, control = list(opt = "optim"), weights=varIdent(form=~1|Habitual_prosthesis))
+anova(MTCModelCorRes, MTCModel)
+```
+
+The p-value too large, at a significance level (\alpha=0.05), we prefer the model without structure for the covariance matrix of the residuals.
+
+Now, we must to reduce the fixed effects removing those that are not significant. In order to perform a LRT for comparing the fixed effect structure of nested models, they should be fitted using ML.
+
+```{r}
+MTCModelREML<-lme(MTC~Terrain+Habitual_prosthesis+Terrain:Habitual_prosthesis+Habitual_prosthesis:Prosthesis+Terrain:Habitual_prosthesis:Prosthesis,    random=~1|Patient,method="ML",
+data=redDataAmp, control = list(opt = "optim"))
+```
+
+
+```{r}
+anova(MTCModelREML)
+```
+
+```{r}
+MTCModelRERedML<-lme(MTC~Terrain+Habitual_prosthesis+Habitual_prosthesis:Prosthesis, random=~1|Patient,method="ML", 
+data=redDataAmp, control = list(opt = "optim"))
+```
+
+And the p-value of the LRT for these two models is,
+
+```{r}
+stat<- (-2*logLik(MTCModelRERedML, REML=FALSE)+2*logLik(MTCModelREML, REML=FALSE))[1]
+stat
+pval<-pchisq(stat,df=5,lower.tail=FALSE)
+pval
+```
+
+Thus, the simplest one model ('MTCModelRERedML') is preffered.
+
+```{r}
+anova(MTCModelRERedML)
+```
+
+##### Model evaluation
+
+The final model is:
+```{r}
+FinalModel<-lme(MTC~Terrain+Habitual_prosthesis+Habitual_prosthesis:Prosthesis, random=~1|Patient,method="REML", data=redDataAmp, control = list(opt = "optim"))
+```
+
+We should perform some diagnostics tests for proving the model assumptions are being met.
+
+As a first step, we should explore the EBLUPs. They must have mean equal to zero and be normally distributed. We will use graphical and analytical tools for exploring these features. 
+
+```{r}
+EBLUPs<-ranef(FinalModel)
+apply(EBLUPs,2, shapiro.test)
+```
+The null hypothesis of the Shapiro-Wilk test is that the sample belongs from a normal distribution. Thus, given a p-value of 0.185 we cannot reject H0.
+
+```{r}
+g<-ggplot(reshape2::melt(EBLUPs), aes(x=variable, y=value, fill=variable))+
+  geom_boxplot()+theme(legend.position = "None")+theme_minimal()+labs(x="EBLUPs",y="",fill="")
+g
+ggsave(g,file="boxplotEBLUPsAmp.jpeg", width = 7, height = 5)
+```
+
+The model residuals must be explored too. We will consider Pearson residuals for both, the QQ-plot and the scatter plot of predicted/residuals values.   
+
+```{r}
+PearsonRes<-resid(FinalModel, type="pearson")
+fittedValues<-predict(FinalModel)
+df<-data.frame(redDataAmp,PearsonRes, fittedValues)
+a<-ggplot(df, aes(sample=PearsonRes))+geom_qq()+geom_abline(slope=1, intercept=0)+labs(y="Pearson's residuals", x="Theoretical values")+theme(legend.position = "none")+theme_minimal()
+b<-ggplot(df, aes(x=fittedValues,y=PearsonRes))+geom_point()+geom_hline(yintercept = 0)+labs(y="Pearson's residuals", x="Predicted values")+theme_minimal()
+g<-plot_grid(a,b, nrow=1, labels=c("A", "B"), rel_widths = c(0.8, 1.2))
+g
+ggplot2::ggsave(g, file="ResidAmp.jpeg", width = 7, height = 5, unit="in", dpi=500)
+```
+
+We can also check the independence between residuals and independent variables.
+
+```{r}
+df$MargResid<-resid(FinalModel, type="response")
+a<-ggplot(df, aes(y=MargResid,x=Prosthesis, fill=Prosthesis))+
+  geom_boxplot()+labs(x="Marginal residuals")+theme_minimal()+
+  scale_fill_brewer(palette = "Set1")
+b<-ggplot(df, aes(y=MargResid,x=Habitual_prosthesis, fill=Habitual_prosthesis))+
+  geom_boxplot()+labs(x="Marginal residuals")+theme_minimal()+
+  scale_fill_brewer(palette = "Set2")
+d<-ggplot(df, aes(y=MargResid,x=Terrain, fill=Terrain))+geom_boxplot()+
+  labs(x="Marginal residuals")+theme_minimal()+
+  scale_fill_brewer(palette = "Set3")
+plot_grid(a,b,d, nrow=1, labels=c("A", "B", "C"))
+```
+
+#### Analyzing model results
+
+The equation defining our model is 
+\begin{equation}
+  MTC_{ijkl}=\mu_0+u_{i}+\alpha_j+\beta_k+\delta_{jl}+\epsilon_{ijkl},~ with~\epsilon_{ijkl}\sim N(0,\sigma^2),~and~u_{i}\sim N(0,\sigma_i^2)
+\end{equation}
+
+where:
+
+- $u_{i}$ is the random effect realted to the *i-th* patient, 
+
+- $\alpha_j$ is the effect of the *j-th* level of the Terrain variable,
+
+- $\beta_k$ is the effect of the *k-th* level of the Habitual prosthesis variable,
+
+- $\delta_jl$ is the effect of the *l-th* level of the Prosthesis variable for individuals using the *j-th* Habitual prosthesis
+
+Exploring the value and significance of the model coefficient derived from these effects:
+
+```{r}
+summary(FinalModel)
+```
+
+As can be observed, excepting the coefficient related to the effect of the Habitual prosthesis variable, all the model coefficients have associated a small p-value enough to reject the null hypothesis of individual tests of coefficient nullity.
+
+We can also compute the intra-class correlation coefficient (ICC) for measuring the percentage of model variance that is explained for the random effect (Patient).
+
+```{r}
+VarCorr(FinalModel)
+ICC=round(as.numeric(VarCorr(FinalModel)[1,1])/sum(as.numeric(VarCorr(FinalModel)[,1]))*100,3)
+ICC
+```
+
+Thus, 68\% of the data variability is due to the variability between patients.
+
+Since we are interested in comparing the MTC among different experimental conditions, we will use the Tukey procedure as a post-hoc test. 
+
+Our model has two significant effects:
+
+- Terrain: The average MTC observed in patients walking in ascent terrain is different from the one measured in descent terrain.
+
+- Habitual Prosthesis*Prosthesis: The average MTC measured in patients using two different prostheses is different, for at least one combination of the levels of Prosthesis and for at least one level of the habitual prosthesis effect.  
+
+In order to identify those differences, we should obtain the estimated means per each combination of the model parameters and then perform the desired contrasts. 
+
+```{r}
+emm<-emmeans(FinalModel, specs = ~ Terrain + Habitual_prosthesis + Habitual_prosthesis:Prosthesis,nesting = "Prosthesis %in% Habitual_prosthesis")
+emm
+```
+
+The table above displays MTC means per group. For instance, the estimated mean of MTC for patients daily using 'NAA' prostheses when are walking in an ascent terrain and using an 'AHA' prosthesis is 22 mm. Whereas, for the same patients the average MTC estimated in a descent terrain and also using an 'AHA' prosthesis is 23.2 mm. 
+
+The graphical comparisson for MTCs observed in different terrains is:
+
+```{r, warning=FALSE, message=F}
+g<-emmip(FinalModel, ~ Terrain, CIs = TRUE)+   theme(axis.text.x = element_text(angle =90))+theme_minimal()
+g
+ggsave(g, file="emmeansAmpTerr.jpeg", height = 6, width=8)
+```
+
+
+The graphical comparisson for MTCs observed in different prosthesis for patients using the two habitual prosthesis here considered is:
+
+```{r, warning=FALSE, message=F}
+g<-emmip(FinalModel, Habitual_prosthesis~Prosthesis, CIs = TRUE)+
+    theme(axis.text.x = element_text(angle = 90))+theme_minimal()
+g
+```
+
+The Tukey post-hoc test for the Terrain variable is:
+
+```{r}
+pairs(lsmeans(emm, ~ Terrain))
+```
+
+Thus, on average, the MTC in descent terrain is higher than the MTC in ascent terrain in 1.2 units (mm)
+
+The average values for MTC in the two terrains here considered are:
+```{r}
+lsmeans(emm, ~ Terrain)
+```
+
+
+The Tukey post-hoc test comparing Prosthesis in the two levels of Habitual prosthesis are:
+
+```{r}
+pairs(lsmeans(emm, ~Prosthesis|Habitual_prosthesis))
+```
+
+Thus, on average, the MTC for patients using prosthesis NAA is significantly lower than the MTC measured for both AHA and AHA-MC prostheses. This conclusion is valid for the two groups of patients defined by their habitual prosthesis. 
+
+The average values for MTC corresponding to the contrasts above are:
+```{r}
+lsmeans(emm, ~Prosthesis|Habitual_prosthesis)
+```
